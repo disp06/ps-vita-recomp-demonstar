@@ -23,7 +23,7 @@ extern const uint16_t font16x32[96][32];
 
 static FILE *logf_;
 static SceKernelLwMutexWork amtx;
-static launch_opts opts = {0, -1, 0};
+static launch_opts opts = {2, -1, 0};
 
 /* ---------------- logging / misc ---------------- */
 void host_vlog(const char *fmt, va_list ap) {
@@ -71,7 +71,9 @@ void host_present(const uint8_t *pix, int w, int h, int pitch, const uint32_t *p
     display_init();
     if (w != last_sw || h != last_sh || opts.aspect != last_aspect) {
         last_sw = w; last_sh = h; last_aspect = opts.aspect;
-        dst_w = opts.aspect ? SW : (SH * 4 / 3);
+        /* 0 = 4:3, 1 = stretched, 2 = original (square pixels, as the PC window showed it: 320x400 -> 435x544) */
+        dst_w = opts.aspect == 1 ? SW : opts.aspect == 2 ? (w * SH + h / 2) / h : (SH * 4 / 3);
+        if (dst_w > SW) dst_w = SW;
         dst_x0 = (SW - dst_w) / 2;
         for (int x = 0; x < dst_w; x++) xtab[x] = x * w / dst_w;
         for (int y = 0; y < SH; y++) ytab[y] = y * h / SH;
@@ -218,7 +220,7 @@ static void load_cfg(void) {
     FILE *f = fopen(DATA_ROOT "/save/launcher.cfg", "r");
     if (!f) return;
     int a, b, c;
-    if (fscanf(f, "%d %d %d", &a, &b, &c) == 3) { opts.aspect = a & 1; opts.ds1_difficulty = (b >= -1 && b <= 3) ? b : -1; opts.smooth = c; }
+    if (fscanf(f, "%d %d %d", &a, &b, &c) == 3) { opts.aspect = (a >= 0 && a <= 2) ? a : 2; opts.ds1_difficulty = (b >= -1 && b <= 3) ? b : -1; opts.smooth = c; }
     fclose(f);
 }
 static void save_cfg(void) {
@@ -245,7 +247,7 @@ static int launcher(void) {
         if (pr & SCE_CTRL_UP) sel = (sel + nitems - 1) % nitems;
         if (pr & SCE_CTRL_DOWN) sel = (sel + 1) % nitems;
         int lr = (pr & SCE_CTRL_RIGHT) ? 1 : (pr & SCE_CTRL_LEFT) ? -1 : 0;
-        if (sel == 2 && (lr || (pr & SCE_CTRL_CROSS))) opts.aspect ^= 1;
+        if (sel == 2 && (lr || (pr & SCE_CTRL_CROSS))) opts.aspect = (opts.aspect + (lr < 0 ? 2 : 1)) % 3;
         if (sel == 3 && lr) opts.ds1_difficulty = (opts.ds1_difficulty + 1 + lr + 5) % 5 - 1;
         if (sel == 3 && (pr & SCE_CTRL_CROSS)) opts.ds1_difficulty = (opts.ds1_difficulty + 2) % 5 - 1;
         if (pr & SCE_CTRL_CROSS) {
@@ -263,7 +265,8 @@ static int launcher(void) {
             snprintf(buf[g], sizeof buf[g], "%s%s", games[g].title, inst[g] ? "" : "   (data missing)");
             items[g] = buf[g];
         }
-        snprintf(buf[2], sizeof buf[2], "Screen: %s", opts.aspect ? "Full screen (stretched)" : "4:3");
+        static const char *am[] = {"4:3", "Full screen (stretched)", "Original (PC window, 1:1 pixels)"};
+        snprintf(buf[2], sizeof buf[2], "Screen: %s", am[opts.aspect]);
         items[2] = buf[2];
         static char dbuf[96];
         snprintf(dbuf, sizeof dbuf, "DemonStar difficulty: %s", diff[opts.ds1_difficulty + 1]);

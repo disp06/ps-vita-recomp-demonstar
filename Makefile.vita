@@ -23,7 +23,7 @@ $(OUT)/eboot.bin: $(OUT)/demonstar.elf
 	$(VITASDK)/bin/vita-make-fself -c -s $(OUT)/demonstar.velf $@
 
 $(OUT)/param.sfo:
-	$(VITASDK)/bin/vita-mksfoex -s TITLE_ID=$(TITLE_ID) -d ATTRIBUTE2=12 "DemonStar" $@
+	$(VITASDK)/bin/vita-mksfoex -s TITLE_ID=$(TITLE_ID) -s APP_VER=01.01 -d ATTRIBUTE2=12 "DemonStar" $@
 
 $(OUT)/DemonStar.vpk: $(OUT)/eboot.bin $(OUT)/param.sfo
 	$(VITASDK)/bin/vita-pack-vpk -s $(OUT)/param.sfo -b $(OUT)/eboot.bin \

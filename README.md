@@ -42,7 +42,7 @@ tools/fetch_soundfont.sh          # GeneralUser GS soundfont for MIDI music
 2. Copy your game files to the Vita:
    - `ux0:data/DemonStar/ds1/` — `ds.exe`, `Game.glb`, `Game2.glb`
    - `ux0:data/DemonStar/sm1/` — `ds.exe`, `Game.glb`, `game1.glb`, `GAME2.glb`, `Game3.glb`, `demon1.ifr`, `player1.bmp`, `player2.bmp`
-3. Launch it and pick a game. The launcher also sets screen mode (4:3 or stretched)
+3. Launch it and pick a game. The launcher also sets screen mode (Original 1:1 pixels like the PC window, 4:3, or stretched)
    and DemonStar's difficulty, because DemonStar has no in-game options menu.
 
 Saves, high scores and settings go to `ux0:data/DemonStar/save/`; log at
