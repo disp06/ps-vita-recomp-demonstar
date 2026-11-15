@@ -1,0 +1,9 @@
+gen/
+build/
+vbuild/
+abuild/
+games/*/*
+!games/*/.keep
+*.sf2
+*.vpk
+__pycache__/

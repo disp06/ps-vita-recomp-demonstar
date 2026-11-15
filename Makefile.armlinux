@@ -1,0 +1,9 @@
+CC=arm-linux-gnueabihf-gcc
+CFLAGS=-O2 -mcpu=cortex-a9 -mfpu=neon -mthumb -fno-strict-aliasing -fwrapv -Irt -Igen -w
+RT=rt/rt_core.c rt/kernel32.c rt/user32.c rt/gdi32.c rt/ddraw.c rt/dsound.c rt/dinput.c rt/winmm.c rt/misc.c rt/main.c gen/stubs.c rt/synth_tsf.c
+abuild/%_code.a: gen/%_tables.c
+	@mkdir -p abuild/obj
+	for f in gen/$*_code*.c gen/$*_tables.c; do $(CC) $(CFLAGS) -c $$f -o abuild/obj/$$(basename $$f .c).o & done; wait
+	arm-linux-gnueabihf-ar rcs $@ abuild/obj/$*_code*.o abuild/obj/$*_tables.o
+abuild/demonstar: abuild/ds1_code.a abuild/sm1_code.a $(RT) rt/host_linux.c
+	$(CC) $(CFLAGS) -static $(RT) rt/host_linux.c abuild/ds1_code.a abuild/sm1_code.a -o $@ -lm -lpthread

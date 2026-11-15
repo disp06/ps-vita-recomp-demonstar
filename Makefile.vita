@@ -1,0 +1,36 @@
+VITASDK?=/opt/vitasdk
+PREFIX=$(VITASDK)/bin/arm-vita-eabi
+CC=$(PREFIX)-gcc
+OPT?=-O2
+CFLAGS=$(OPT) -mcpu=cortex-a9 -mfpu=neon -mtune=cortex-a9 -fno-strict-aliasing -fwrapv -ffunction-sections -Irt -Igen -w -Wl,-q
+RT=rt/rt_core.c rt/kernel32.c rt/user32.c rt/gdi32.c rt/ddraw.c rt/dsound.c rt/dinput.c rt/winmm.c rt/misc.c rt/main.c gen/stubs.c rt/synth_tsf.c rt/host_vita.c rt/font.c
+LIBS=-lSceDisplay_stub -lSceCtrl_stub -lSceAudio_stub -lScePower_stub -lSceAppUtil_stub -lSceAppMgr_stub -lSceSysmodule_stub -lSceCommonDialog_stub -lSceLibKernel_stub -lSceKernelThreadMgr_stub -lm
+TITLE_ID=DMST00001
+OUT=vbuild
+
+all: $(OUT)/DemonStar.vpk
+
+$(OUT)/%_code.a: gen/%_tables.c
+	@mkdir -p $(OUT)/obj
+	for f in gen/$*_code*.c gen/$*_tables.c; do $(CC) $(CFLAGS) -c $$f -o $(OUT)/obj/$$(basename $$f .c).o & done; wait
+	$(PREFIX)-ar rcs $@ $(OUT)/obj/$*_code*.o $(OUT)/obj/$*_tables.o
+
+$(OUT)/demonstar.elf: $(OUT)/ds1_code.a $(OUT)/sm1_code.a $(RT)
+	$(CC) $(CFLAGS) $(RT) $(OUT)/ds1_code.a $(OUT)/sm1_code.a -o $@ $(LIBS)
+
+$(OUT)/eboot.bin: $(OUT)/demonstar.elf
+	$(VITASDK)/bin/vita-elf-create $< $(OUT)/demonstar.velf
+	$(VITASDK)/bin/vita-make-fself -c -s $(OUT)/demonstar.velf $@
+
+$(OUT)/param.sfo:
+	$(VITASDK)/bin/vita-mksfoex -s TITLE_ID=$(TITLE_ID) -d ATTRIBUTE2=12 "DemonStar" $@
+
+$(OUT)/DemonStar.vpk: $(OUT)/eboot.bin $(OUT)/param.sfo
+	$(VITASDK)/bin/vita-pack-vpk -s $(OUT)/param.sfo -b $(OUT)/eboot.bin \
+		-a vita/sce_sys/icon0.png=sce_sys/icon0.png \
+		-a vita/sce_sys/livearea/contents/bg.png=sce_sys/livearea/contents/bg.png \
+		-a vita/sce_sys/livearea/contents/startup.png=sce_sys/livearea/contents/startup.png \
+		-a vita/sce_sys/livearea/contents/template.xml=sce_sys/livearea/contents/template.xml \
+		-a $(SF2)=GeneralUser-GS.sf2 \
+		-a vita/LICENSES.txt=LICENSES.txt \
+		$@

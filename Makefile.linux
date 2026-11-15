@@ -1,0 +1,9 @@
+CC=gcc
+CFLAGS?=-O1 -g -fno-strict-aliasing -fwrapv -Irt -Igen -w
+RT=rt/rt_core.c rt/kernel32.c rt/user32.c rt/gdi32.c rt/ddraw.c rt/dsound.c rt/dinput.c rt/winmm.c rt/misc.c rt/main.c gen/stubs.c rt/synth_tsf.c
+build/%_code.a: gen/%_tables.c
+	@mkdir -p build/obj
+	for f in gen/$*_code*.c gen/$*_tables.c; do $(CC) $(CFLAGS) -c $$f -o build/obj/$$(basename $$f .c).o & done; wait
+	ar rcs $@ build/obj/$*_code*.o build/obj/$*_tables.o
+build/demonstar: build/ds1_code.a build/sm1_code.a $(RT) rt/host_linux.c
+	$(CC) $(CFLAGS) $(RT) rt/host_linux.c build/ds1_code.a build/sm1_code.a -o $@ -lm -lpthread
