@@ -67,7 +67,7 @@ void host_present(const uint8_t *pix, int w, int h, int pitch, const uint32_t *p
 }
 
 /* input script: lines "<ms> <hexbuttons>" */
-static struct { uint32_t t, b; } script[4096]; static int nscript;
+static struct { uint32_t t, b; } script[4096], script2[4096]; static int nscript, nscript2;
 void host_poll(host_input_t *in) {
     uint32_t now = host_ticks_ms();
     uint32_t b = 0;
@@ -95,6 +95,11 @@ void host_poll(host_input_t *in) {
         if (t > 12000 && t < 12150 && !getenv("DS_BOT_AFTER")) b = HB_SELECT;
     }
     in->buttons = b;
+    if (getenv("DS_P2")) {
+        uint32_t b2 = 0;
+        for (int k = 0; k < nscript2 && script2[k].t <= now; k++) b2 = script2[k].b;
+        in->p2_present = 1; in->buttons2 = b2;
+    }
     if (max_time && now > max_time) { static int d; if (!d) { d = 1; dump_frame("last"); fprintf(stderr, "max time reached (poll), frames=%d\n", frame_no); } in->quit = 1; }
     static uint32_t lastdump;
     if (getenv("DS_DUMP_MS") && now - lastdump >= (uint32_t)atoi(getenv("DS_DUMP_MS"))) {
@@ -135,6 +140,10 @@ int main(int argc, char **argv) {
     if (getenv("DS_SPEED")) speed = atof(getenv("DS_SPEED"));
     if (getenv("DS_DUMP_EVERY")) dump_every = atoi(getenv("DS_DUMP_EVERY"));
     if (getenv("DS_MAXTIME")) max_time = atoi(getenv("DS_MAXTIME"));
+    if (getenv("DS_INPUT2")) {
+        FILE *f = fopen(getenv("DS_INPUT2"), "r");
+        if (f) { while (nscript2 < 4096 && fscanf(f, "%u %x", &script2[nscript2].t, &script2[nscript2].b) == 2) nscript2++; fclose(f); }
+    }
     if (getenv("DS_INPUT")) {
         FILE *f = fopen(getenv("DS_INPUT"), "r");
         if (f) { while (nscript < 4096 && fscanf(f, "%u %x", &script[nscript].t, &script[nscript].b) == 2) nscript++; fclose(f); }

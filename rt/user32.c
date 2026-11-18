@@ -458,6 +458,7 @@ static void type_char(int c) {
 }
 extern void dinput_update(const host_input_t *in);
 uint32_t g_pad_buttons;
+host_input_t g_last_input;
 
 void win_pump_host(void) {
     host_input_t in;
@@ -513,6 +514,7 @@ void win_pump_host(void) {
         }
     }
     prev_buttons = in.buttons;
+    g_last_input = in;
     dinput_update(&in);
     user_timers();
     winmm_service();

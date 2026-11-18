@@ -35,5 +35,8 @@ typedef struct {
     int ax, ay;            /* left analog -128..127 */
     int quit;
     int touch, tx, ty;     /* touch in game coordinates (unused) */
+    int p2_present;        /* second controller (player 2) connected */
+    uint32_t buttons2;     /* player 2 HB_* */
+    int ax2, ay2;          /* player 2 left analog -128..127 */
 } host_input_t;
 void host_poll(host_input_t *in);

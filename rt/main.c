@@ -38,6 +38,24 @@ int game_main(int idx, const launch_opts *opt) {
     reg_load();
     if (opt && idx == 0 && opt->ds1_difficulty >= 0)
         reg_seed_dword("HKCU\\Software\\Mountain King Studios\\DemonStar", "OptDifficulty", opt->ds1_difficulty);
+    {
+        extern uint32_t reg_get_dword(const char *key, const char *name, uint32_t def);
+        host_input_t in; memset(&in, 0, sizeof in); host_poll(&in);
+        rt_log("player 2 controller: %s\n", in.p2_present ? "connected" : "not connected");
+        if (idx == 1) {
+            const char *k = "HKCU\\Software\\Mountain King Studios\\DemonStarSM1";
+            if (in.p2_present) {
+                /* SM1 input types: 0 keyboard, 1 mouse, 2 joystick 1, 3 joystick 2.
+                   The Bluetooth pad is its joystick 1: give it to player 2 and keep
+                   player 1 on the Vita's own controls (keyboard mapping). */
+                reg_seed_dword(k, "OptPlayer2DefInput", 2);
+                if (reg_get_dword(k, "OptPlayer1DefInput", 0) >= 2) reg_seed_dword(k, "OptPlayer1DefInput", 0);
+            } else {
+                if (reg_get_dword(k, "OptPlayer2DefInput", 0) >= 2) reg_seed_dword(k, "OptPlayer2DefInput", 0);
+                if (reg_get_dword(k, "OptPlayer1DefInput", 0) >= 2) reg_seed_dword(k, "OptPlayer1DefInput", 0);
+            }
+        }
+    }
     rt_log("starting %s at %08x\n", g_game_id, entry);
     R.esp -= 4; wr32(R.esp, 0xffffeff0u);
     call_ind(entry);

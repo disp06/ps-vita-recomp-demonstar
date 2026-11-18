@@ -138,3 +138,9 @@ void reg_seed_dword(const char *key, const char *name, uint32_t v) {
     r->type = 4; r->len = 4; memcpy(r->data, &v, 4);
     reg_dirty = 1;
 }
+
+uint32_t reg_get_dword(const char *key, const char *name, uint32_t def) {
+    regval_t *r = find_val(key, name);
+    if (!r || r->len < 4) return def;
+    uint32_t v; memcpy(&v, r->data, 4); return v;
+}

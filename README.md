@@ -63,6 +63,21 @@ Saves, high scores and settings go to `ux0:data/DemonStar/save/`; log at
 
 High-score names are entered with the d-pad and fire, like the original.
 
+## Two players (Bluetooth controller)
+
+Player 1 uses the Vita's own controls; player 2 uses a Bluetooth controller.
+The pad shows up in both games as a joystick and is given to player 2.
+
+- Best: the [8BitVita-Pro3](https://github.com/disp06/8BitVita-Pro3) plugin v1.2+
+  (`BtSetPort0Mirror` / `BtGetPadState`): while DemonStar runs, the pad is no
+  longer copied onto the Vita's buttons, so both players are fully separate.
+- Other plugins that put the pad on controller port 2 also work; the pad's
+  buttons are then filtered out of player 1.
+- Connect the pad before starting the game (the games look for joysticks at start).
+- DemonStar: player 2 presses START on the pad to join.
+  Secret Missions 1: choose Start Game -> 2 Player Game.
+- Pad: d-pad/stick move, A/B (Cross/Square) fire, Circle bomb, START join/pause.
+
 ## How it works
 
 - `tools/pe.py` — loads the PE and finds all functions (recursive descent from the

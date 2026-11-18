@@ -19,9 +19,57 @@ SHIM(WINMM, timeSetEvent, 5) {
 }
 SHIM(WINMM, timeKillEvent, 1) { uint32_t id = ARG(0); if (id >= 1 && id <= 16) mmt[id - 1].used = 0; return 0; }
 
-SHIM(WINMM, joyGetNumDevs, 0) { return 0; }
-SHIM(WINMM, joyGetDevCapsA, 3) { return 167; }
-SHIM(WINMM, joyGetPosEx, 2) { return 167; }   /* JOYERR_UNPLUGGED */
+/* Joysticks: joystick 1 (id 0) is never present, so player 1 stays on the
+   keyboard mapping of the Vita's own controls.  Joystick 2 (id 1) is the
+   second controller (Bluetooth pad) when it is connected: the games assign it
+   to player 2.  Buttons: 1 = fire, 2 = bomb, 3 = start, 4 = special. */
+extern host_input_t g_last_input;
+static int joy2_present(void) {
+    static int polled;
+    if (!polled) { polled = 1; win_pump_host(); }
+    return g_last_input.p2_present;
+}
+/* DemonStar finds joysticks by winmm id and gives "Joystick 2" (id 1) to
+   player 2; Secret Missions 1 numbers the DirectInput joysticks it found, so
+   the only one (the Bluetooth pad) is its joystick 1 (id 0). */
+#include "games.h"
+static uint32_t joy_p2_id(void) { return g_game_idx == 1 ? 0 : 1; }
+SHIM(WINMM, joyGetNumDevs, 0) { return 2; }
+SHIM(WINMM, joyGetDevCapsA, 3) {
+    uint32_t id = ARG(0), p = ARG(1), n = ARG(2);
+    if (id != joy_p2_id() || !joy2_present()) return 167;   /* JOYERR_UNPLUGGED */
+    if (n > 404) n = 404;
+    memset(MEM + p, 0, n);
+    if (n < 112) return 0;
+    wr16(p, 0x2dc8); wr16(p + 2, 0x6001);
+    strcpy((char *)MEM + p + 4, "Bluetooth Gamepad");
+    wr32(p + 36, 0); wr32(p + 40, 65535); wr32(p + 44, 0); wr32(p + 48, 65535);
+    wr32(p + 52, 0); wr32(p + 56, 65535);
+    wr32(p + 60, 4); wr32(p + 64, 10); wr32(p + 68, 1000);
+    wr32(p + 100, 2); wr32(p + 104, 2); wr32(p + 108, 4);
+    return 0;
+}
+SHIM(WINMM, joyGetPosEx, 2) {
+    uint32_t id = ARG(0), p = ARG(1);
+    if (id != joy_p2_id() || !joy2_present()) return 167;
+    const host_input_t *in = &g_last_input;
+    uint32_t b = in->buttons2;
+    int x = in->ax2, y = in->ay2;
+    if (b & HB_LEFT) x = -128; else if (b & HB_RIGHT) x = 127; else if (x > -40 && x < 40) x = 0;
+    if (b & HB_UP) y = -128; else if (b & HB_DOWN) y = 127; else if (y > -40 && y < 40) y = 0;
+    uint32_t jb = 0;
+    if (b & HB_FIRE) jb |= 1;
+    if (b & HB_BOMB) jb |= 2;
+    if (b & HB_START) jb |= 4;
+    if (b & (HB_TRIANGLE | HB_SELECT)) jb |= 8;
+    uint32_t xp = (uint32_t)((x + 128) * 65535 / 255), yp = (uint32_t)((y + 128) * 65535 / 255);
+    if (x == 0) xp = 32767;
+    if (y == 0) yp = 32767;
+    wr32(p + 8, xp); wr32(p + 12, yp); wr32(p + 16, 32767); wr32(p + 20, 32767);
+    wr32(p + 24, 32767); wr32(p + 28, 32767);
+    wr32(p + 32, jb); wr32(p + 36, __builtin_popcount(jb)); wr32(p + 40, 0xffff);
+    return 0;
+}
 
 /* ---------------- MIDI ---------------- */
 #define HMIDI_OUT 0x5100u

@@ -133,12 +133,19 @@ void host_audio_init(void) {
 }
 
 /* ---------------- input ---------------- */
+/* Player 1 = the Vita's own controls.  Player 2 = a Bluetooth pad.
+   With the 8BitVita-Pro3 plugin (v1.2+) the pad is read on its own and is not
+   mirrored onto the Vita's buttons for this app (BtSetPort0Mirror /
+   BtGetPadState).  With other plugins that put the pad on controller port 2,
+   the pad is read from port 2 and its buttons are filtered out of player 1. */
+int BtSetPort0Mirror(int enable);                 /* weak imports from 8BitVita-Pro3.skprx */
+int BtGetPadState(int port, SceCtrlData *out);
+#define BT_API_MAGIC 0x8B17
+static int bt_api = -1;
 static uint32_t quit_hold;
-void host_poll(host_input_t *in) {
-    SceCtrlData pad;
-    memset(&pad, 0, sizeof pad);
-    sceCtrlPeekBufferPositive(0, &pad, 1);
-    uint32_t b = 0, p = pad.buttons;
+
+static uint32_t map_buttons(uint32_t p) {
+    uint32_t b = 0;
     if (p & SCE_CTRL_UP) b |= HB_UP;
     if (p & SCE_CTRL_DOWN) b |= HB_DOWN;
     if (p & SCE_CTRL_LEFT) b |= HB_LEFT;
@@ -151,8 +158,57 @@ void host_poll(host_input_t *in) {
     if (p & SCE_CTRL_SELECT) b |= HB_SELECT;
     if (p & SCE_CTRL_LTRIGGER) b |= HB_L;
     if (p & SCE_CTRL_RTRIGGER) b |= HB_R;
+    return b;
+}
+
+void host_bt_release(void) { if (bt_api == 1) BtSetPort0Mirror(1); }
+
+/* returns 1 and fills pad if a player 2 controller is connected */
+static int read_p2(SceCtrlData *pad) {
+    if (bt_api < 0) {
+        bt_api = BtSetPort0Mirror(0) == BT_API_MAGIC;
+        extern void rt_log(const char *fmt, ...);
+        rt_log("8BitVita-Pro3 player 2 API: %s\n", bt_api ? "yes" : "no (using controller port 2)");
+    }
+    if (bt_api) {
+        for (int port = 1; port < 5; port++) {
+            memset(pad, 0, sizeof *pad);
+            if (BtGetPadState(port, pad) == 1) return 1;
+        }
+        return 0;
+    }
+    SceCtrlPortInfo info;
+    memset(&info, 0, sizeof info);
+    if (sceCtrlGetControllerPortInfo(&info) < 0) return 0;
+    for (int port = 1; port < 5; port++) {
+        int t = info.port[port];
+        if (t == SCE_CTRL_TYPE_UNPAIRED || t == SCE_CTRL_TYPE_PHY || t == SCE_CTRL_TYPE_VIRT) continue;
+        memset(pad, 0, sizeof *pad);
+        if (sceCtrlPeekBufferPositiveExt2(port, pad, 1) > 0) return 1;
+    }
+    return 0;
+}
+
+void host_poll(host_input_t *in) {
+    SceCtrlData pad, pad2;
+    memset(&pad, 0, sizeof pad);
+    int p2 = read_p2(&pad2);
+    sceCtrlPeekBufferPositive(0, &pad, 1);
+    uint32_t p = pad.buttons;
     in->ax = (int)pad.lx - 128;
     in->ay = (int)pad.ly - 128;
+    if (p2) {
+        in->p2_present = 1;
+        in->buttons2 = map_buttons(pad2.buttons);
+        in->ax2 = (int)pad2.lx - 128;
+        in->ay2 = (int)pad2.ly - 128;
+        if (!bt_api) {
+            /* the pad is mirrored onto port 0: keep its input away from player 1 */
+            p &= ~pad2.buttons;
+            if (in->ax2 < -40 || in->ax2 > 40 || in->ay2 < -40 || in->ay2 > 40) in->ax = in->ay = 0;
+        }
+    }
+    uint32_t b = map_buttons(p);
     /* L + R + START + SELECT held for 1 second: quit */
     if ((p & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER | SCE_CTRL_START | SCE_CTRL_SELECT)) ==
         (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER | SCE_CTRL_START | SCE_CTRL_SELECT)) {
@@ -204,6 +260,7 @@ void host_fatal(const char *msg) {
         if (pad.buttons & SCE_CTRL_START) break;
         sceKernelDelayThread(16000);
     }
+    host_bt_release();
     sceKernelExitProcess(0);
     for (;;) {}
 }
@@ -242,6 +299,7 @@ static int launcher(void) {
     for (;;) {
         SceCtrlData pad;
         sceCtrlPeekBufferPositive(0, &pad, 1);
+        { SceCtrlData p2pad; if (read_p2(&p2pad)) pad.buttons |= p2pad.buttons; }
         uint32_t p = pad.buttons, pr = p & ~prev;
         prev = p;
         if (pr & SCE_CTRL_UP) sel = (sel + nitems - 1) % nitems;
@@ -282,6 +340,12 @@ static int launcher(void) {
         text(d, 50, y, "Controls:  D-pad / left stick = move   Cross / Square = fire   Circle = mega bomb (also selects in menus)", 0xffb0b0b0, 1); y += 20;
         text(d, 50, y, "           START = start player 1 (F2)   SELECT = Esc (menu in Secret Missions)", 0xffb0b0b0, 1); y += 20;
         text(d, 50, y, "           Triangle = Enter / pause   L + Up/Down/Cross = type letters   R = Enter   L+R+START+SELECT = quit", 0xffb0b0b0, 1); y += 34;
+        {
+            SceCtrlData t; int c = read_p2(&t);
+            text(d, 50, y, c ? "Player 2: Bluetooth controller connected" : "Player 2: no Bluetooth controller (connect it before starting for 2 players)",
+                 c ? 0xff60ff60 : 0xff8080a0, 1);
+            y += 24;
+        }
         text(d, 50, y, "Game data: " DATA_ROOT "/ds1/  and  " DATA_ROOT "/sm1/", 0xff80a0a0, 1); y += 20;
         text(d, 50, y, "(copy your own ds.exe and *.glb files there)", 0xff80a0a0, 1);
         flip();
@@ -292,6 +356,7 @@ static int launcher(void) {
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     sceKernelCreateLwMutex(&amtx, "audio", 2, 0, NULL);
+    atexit(host_bt_release);
     scePowerSetArmClockFrequency(444);
     scePowerSetBusClockFrequency(222);
     scePowerSetGpuClockFrequency(222);
@@ -306,9 +371,10 @@ int main(int argc, char **argv) {
     if (g < 0) { sceKernelExitProcess(0); return 0; }
     for (int k = 0; k < NFB; k++) memset(fb[k], 0, SW * SH * 4);
     game_main(g, &opts);
+    host_bt_release();
     sceKernelExitProcess(0);
     return 0;
 }
 
 /* process exit from the game (ExitProcess) */
-void host_exit(void) { sceKernelExitProcess(0); }
+void host_exit(void) { host_bt_release(); sceKernelExitProcess(0); }
