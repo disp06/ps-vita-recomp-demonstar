@@ -3,8 +3,8 @@ PREFIX=$(VITASDK)/bin/arm-vita-eabi
 CC=$(PREFIX)-gcc
 OPT?=-O2
 CFLAGS=$(OPT) -mcpu=cortex-a9 -mfpu=neon -mtune=cortex-a9 -fno-strict-aliasing -fwrapv -ffunction-sections -Irt -Igen -w -Wl,-q
-RT=rt/rt_core.c rt/kernel32.c rt/user32.c rt/gdi32.c rt/ddraw.c rt/dsound.c rt/dinput.c rt/winmm.c rt/misc.c rt/main.c gen/stubs.c rt/synth_tsf.c rt/host_vita.c rt/font.c
-LIBS=-Lvita/lib -l8BitVita-Pro3_stub_weak -lSceDisplay_stub -lSceCtrl_stub -lSceAudio_stub -lScePower_stub -lSceAppUtil_stub -lSceAppMgr_stub -lSceSysmodule_stub -lSceCommonDialog_stub -lSceLibKernel_stub -lSceKernelThreadMgr_stub -lm
+RT=rt/rt_core.c rt/kernel32.c rt/user32.c rt/gdi32.c rt/ddraw.c rt/dsound.c rt/dinput.c rt/winmm.c rt/misc.c rt/main.c gen/stubs.c rt/synth_tsf.c rt/host_vita.c rt/font.c rt/netplay.c
+LIBS=-Lvita/lib -l8BitVita-Pro3_stub_weak -lSceDisplay_stub -lSceCtrl_stub -lSceAudio_stub -lScePower_stub -lSceAppUtil_stub -lSceAppMgr_stub -lSceSysmodule_stub -lSceCommonDialog_stub -lSceGxm_stub -lSceNetCtl_stub -lSceNet_stub -lScePspnetAdhoc_stub -lSceLibKernel_stub -lSceKernelThreadMgr_stub -lm
 TITLE_ID=DMST00001
 OUT=vbuild
 
@@ -23,7 +23,7 @@ $(OUT)/eboot.bin: $(OUT)/demonstar.elf
 	$(VITASDK)/bin/vita-make-fself -c -s $(OUT)/demonstar.velf $@
 
 $(OUT)/param.sfo:
-	$(VITASDK)/bin/vita-mksfoex -s TITLE_ID=$(TITLE_ID) -s APP_VER=01.02 -d ATTRIBUTE2=12 "DemonStar" $@
+	$(VITASDK)/bin/vita-mksfoex -s TITLE_ID=$(TITLE_ID) -s APP_VER=01.03 -d ATTRIBUTE2=12 "DemonStar" $@
 
 $(OUT)/DemonStar.vpk: $(OUT)/eboot.bin $(OUT)/param.sfo
 	$(VITASDK)/bin/vita-pack-vpk -s $(OUT)/param.sfo -b $(OUT)/eboot.bin \

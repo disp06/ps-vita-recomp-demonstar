@@ -24,6 +24,13 @@ extern const uint16_t font16x32[96][32];
 static FILE *logf_;
 static SceKernelLwMutexWork amtx;
 static launch_opts opts = {2, -1, 0};
+static int play_mode;   /* 0 one Vita, 1 ad-hoc host, 2 ad-hoc join, 3 Wi-Fi host, 4 Wi-Fi join */
+static int net_session(int mode, int g, char *err, int errlen);
+static char net_msg[128];
+static uint32_t net_msg_until;
+static void banner(uint32_t *d);
+void message_screen(const char *title, const char *msg);
+extern void rt_log(const char *fmt, ...);
 
 /* ---------------- logging / misc ---------------- */
 void host_vlog(const char *fmt, va_list ap) {
@@ -101,6 +108,10 @@ void host_present(const uint8_t *pix, int w, int h, int pitch, const uint32_t *p
             for (int j = 8; j < 52; j++) for (int i = 8; i < 72; i++) d[j * SW + i] = 0xff402010;
             text(d, 18, 14, s, 0xffffffff, 0);
         }
+    }
+    if (net_msg[0]) {
+        if (net_msg_until && (int32_t)(host_ticks_ms() - net_msg_until) > 0) net_msg[0] = 0;
+        else banner(d);
     }
     flip();
     sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
@@ -192,7 +203,7 @@ static int read_p2(SceCtrlData *pad) {
 void host_poll(host_input_t *in) {
     SceCtrlData pad, pad2;
     memset(&pad, 0, sizeof pad);
-    int p2 = read_p2(&pad2);
+    int p2 = play_mode ? 0 : read_p2(&pad2);   /* two-Vita play: player 2 is the other Vita */
     sceCtrlPeekBufferPositive(0, &pad, 1);
     uint32_t p = pad.buttons;
     in->ax = (int)pad.lx - 128;
@@ -276,8 +287,11 @@ static int game_installed(int g) {
 static void load_cfg(void) {
     FILE *f = fopen(DATA_ROOT "/save/launcher.cfg", "r");
     if (!f) return;
-    int a, b, c;
-    if (fscanf(f, "%d %d %d", &a, &b, &c) == 3) { opts.aspect = (a >= 0 && a <= 2) ? a : 2; opts.ds1_difficulty = (b >= -1 && b <= 3) ? b : -1; opts.smooth = c; }
+    int a, b, c, m = 0;
+    if (fscanf(f, "%d %d %d %d", &a, &b, &c, &m) >= 3) {
+        opts.aspect = (a >= 0 && a <= 2) ? a : 2; opts.ds1_difficulty = (b >= -1 && b <= 3) ? b : -1; opts.smooth = c;
+        play_mode = (m >= 0 && m <= 4) ? m : 0;
+    }
     fclose(f);
 }
 static void save_cfg(void) {
@@ -285,67 +299,80 @@ static void save_cfg(void) {
     sceIoMkdir(DATA_ROOT "/save", 0777);
     FILE *f = fopen(DATA_ROOT "/save/launcher.cfg", "w");
     if (!f) return;
-    fprintf(f, "%d %d %d\n", opts.aspect, opts.ds1_difficulty, opts.smooth);
+    fprintf(f, "%d %d %d %d\n", opts.aspect, opts.ds1_difficulty, opts.smooth, play_mode);
     fclose(f);
 }
 
+/* items: 0/1 games, 2 play mode, 3 screen, 4 difficulty, 5 exit */
 static int launcher(void) {
     static const char *diff[] = {"Keep game setting", "Easy", "Normal", "Hard", "Insane"};
-    int sel = 0, nitems = 5;
-    uint32_t prev = 0;
+    static const char *pm[] = {"One Vita (2nd player: Bluetooth controller)", "Two Vitas, ad-hoc: HOST (player 1)",
+                               "Two Vitas, ad-hoc: JOIN (player 2)", "Two Vitas, same Wi-Fi: HOST (player 1)",
+                               "Two Vitas, same Wi-Fi: JOIN (player 2)"};
+    int sel = 0, nitems = 6;
+    uint32_t prev = ~0u;
     int inst[NGAMES];
     for (int g = 0; g < NGAMES; g++) inst[g] = game_installed(g);
     if (!inst[0] && inst[1]) sel = 1;
     for (;;) {
+        int joining = play_mode == 2 || play_mode == 4;
         SceCtrlData pad;
         sceCtrlPeekBufferPositive(0, &pad, 1);
-        { SceCtrlData p2pad; if (read_p2(&p2pad)) pad.buttons |= p2pad.buttons; }
+        if (!play_mode) { SceCtrlData p2pad; if (read_p2(&p2pad)) pad.buttons |= p2pad.buttons; }
         uint32_t p = pad.buttons, pr = p & ~prev;
         prev = p;
-        if (pr & SCE_CTRL_UP) sel = (sel + nitems - 1) % nitems;
-        if (pr & SCE_CTRL_DOWN) sel = (sel + 1) % nitems;
+        if (pr & SCE_CTRL_UP) { sel = (sel + nitems - 1) % nitems; if (joining && sel == 1) sel = 0; }
+        if (pr & SCE_CTRL_DOWN) { sel = (sel + 1) % nitems; if (joining && sel == 1) sel = 2; }
         int lr = (pr & SCE_CTRL_RIGHT) ? 1 : (pr & SCE_CTRL_LEFT) ? -1 : 0;
-        if (sel == 2 && (lr || (pr & SCE_CTRL_CROSS))) opts.aspect = (opts.aspect + (lr < 0 ? 2 : 1)) % 3;
-        if (sel == 3 && lr) opts.ds1_difficulty = (opts.ds1_difficulty + 1 + lr + 5) % 5 - 1;
-        if (sel == 3 && (pr & SCE_CTRL_CROSS)) opts.ds1_difficulty = (opts.ds1_difficulty + 2) % 5 - 1;
+        if (sel == 2 && (lr || (pr & SCE_CTRL_CROSS))) play_mode = (play_mode + (lr < 0 ? 4 : 1)) % 5;
+        if (sel == 3 && (lr || (pr & SCE_CTRL_CROSS))) opts.aspect = (opts.aspect + (lr < 0 ? 2 : 1)) % 3;
+        if (sel == 4 && lr) opts.ds1_difficulty = (opts.ds1_difficulty + 1 + lr + 5) % 5 - 1;
+        if (sel == 4 && (pr & SCE_CTRL_CROSS)) opts.ds1_difficulty = (opts.ds1_difficulty + 2) % 5 - 1;
+        joining = play_mode == 2 || play_mode == 4;
+        if (joining && sel == 1) sel = 0;
         if (pr & SCE_CTRL_CROSS) {
-            if (sel < NGAMES && inst[sel]) { save_cfg(); return sel; }
-            if (sel == 4) { save_cfg(); return -1; }
+            if (joining && sel == 0) { save_cfg(); return 0; }
+            if (!joining && sel < NGAMES && inst[sel]) { save_cfg(); return sel; }
+            if (sel == 5) { save_cfg(); return -1; }
         }
         uint32_t *d = fb[fbi];
         fill(d, 0, 0, SW, SH, 0xff100404);
         fill(d, 0, 0, SW, 70, 0xff201010);
         text(d, 40, 20, "DEMONSTAR  -  PS Vita", 0xff3050ff, 0);
         text(d, 600, 28, "static recompilation", 0xff8080a0, 1);
-        const char *items[5];
-        char buf[3][96];
-        for (int g = 0; g < NGAMES; g++) {
+        char buf[6][100];
+        for (int g = 0; g < NGAMES; g++)
             snprintf(buf[g], sizeof buf[g], "%s%s", games[g].title, inst[g] ? "" : "   (data missing)");
-            items[g] = buf[g];
+        if (joining) {
+            snprintf(buf[0], sizeof buf[0], "JOIN player 1's game");
+            snprintf(buf[1], sizeof buf[1], "   (player 1 picks DemonStar or Secret Missions)");
         }
+        snprintf(buf[2], sizeof buf[2], "Play: %s", pm[play_mode]);
         static const char *am[] = {"4:3", "Full screen (stretched)", "Original (PC window, 1:1 pixels)"};
-        snprintf(buf[2], sizeof buf[2], "Screen: %s", am[opts.aspect]);
-        items[2] = buf[2];
-        static char dbuf[96];
-        snprintf(dbuf, sizeof dbuf, "DemonStar difficulty: %s", diff[opts.ds1_difficulty + 1]);
-        items[3] = dbuf;
-        items[4] = "Exit";
+        snprintf(buf[3], sizeof buf[3], "Screen: %s", am[opts.aspect]);
+        snprintf(buf[4], sizeof buf[4], "DemonStar difficulty: %s%s", diff[opts.ds1_difficulty + 1], joining ? "  (player 1's is used)" : "");
+        snprintf(buf[5], sizeof buf[5], "Exit");
         for (int k = 0; k < nitems; k++) {
-            int y = 100 + k * 46 + (k >= 2 ? 16 : 0);
-            if (k == sel) fill(d, 30, y - 4, 900, 40, 0xff402020);
-            uint32_t c = (k < NGAMES && !inst[k]) ? 0xff707070 : 0xffffffff;
-            text(d, 50, y, items[k], c, 0);
+            int y = 96 + k * 40 + (k >= 2 ? 12 : 0);
+            if (k == sel) fill(d, 30, y - 4, 900, 38, 0xff402020);
+            uint32_t c = joining ? (k == 1 ? 0xff909090 : 0xffffffff) : (k < NGAMES && !inst[k]) ? 0xff707070 : 0xffffffff;
+            if (k == 2 && play_mode) c = 0xff60e0ff;
+            text(d, 50, y, buf[k], c, 0);
         }
-        int y = 370;
+        int y = 360;
         text(d, 50, y, "Controls:  D-pad / left stick = move   Cross / Square = fire   Circle = mega bomb (also selects in menus)", 0xffb0b0b0, 1); y += 20;
         text(d, 50, y, "           START = start player 1 (F2)   SELECT = Esc (menu in Secret Missions)", 0xffb0b0b0, 1); y += 20;
-        text(d, 50, y, "           Triangle = Enter / pause   L + Up/Down/Cross = type letters   R = Enter   L+R+START+SELECT = quit", 0xffb0b0b0, 1); y += 34;
-        {
+        text(d, 50, y, "           Triangle = Enter / pause   L + Up/Down/Cross = type letters   R = Enter   L+R+START+SELECT = quit", 0xffb0b0b0, 1); y += 30;
+        if (!play_mode) {
             SceCtrlData t; int c = read_p2(&t);
             text(d, 50, y, c ? "Player 2: Bluetooth controller connected" : "Player 2: no Bluetooth controller (connect it before starting for 2 players)",
                  c ? 0xff60ff60 : 0xff8080a0, 1);
-            y += 24;
+        } else if (play_mode <= 2) {
+            text(d, 50, y, "Ad-hoc: Vitas side by side, Wi-Fi on (no flight mode). Player 2 presses START in the game to join in.", 0xff60e0ff, 1);
+        } else {
+            text(d, 50, y, "Same Wi-Fi: both Vitas connected to one router (Settings > Network). Player 2 presses START to join in.", 0xff60e0ff, 1);
         }
+        y += 26;
         text(d, 50, y, "Game data: " DATA_ROOT "/ds1/  and  " DATA_ROOT "/sm1/", 0xff80a0a0, 1); y += 20;
         text(d, 50, y, "(copy your own ds.exe and *.glb files there)", 0xff80a0a0, 1);
         flip();
@@ -367,8 +394,16 @@ int main(int argc, char **argv) {
     sceIoMkdir(DATA_ROOT "/save/sm1", 0777);
     display_init();
     load_cfg();
-    int g = launcher();
-    if (g < 0) { sceKernelExitProcess(0); return 0; }
+    int g;
+    for (;;) {
+        g = launcher();
+        if (g < 0) { sceKernelExitProcess(0); return 0; }
+        if (!play_mode) break;
+        char err[200] = "";
+        g = net_session(play_mode, g, err, sizeof err);
+        if (g >= 0) break;
+        if (strcmp(err, "Cancelled.")) message_screen("DEMONSTAR  -  two-Vita play", err);
+    }
     for (int k = 0; k < NFB; k++) memset(fb[k], 0, SW * SH * 4);
     game_main(g, &opts);
     host_bt_release();
@@ -378,3 +413,374 @@ int main(int argc, char **argv) {
 
 /* process exit from the game (ExitProcess) */
 void host_exit(void) { host_bt_release(); sceKernelExitProcess(0); }
+
+/* ======================================================================
+ * Two-Vita play: transports for rt/netplay.c
+ *   ad-hoc     - the system's ad-hoc dialog (group "DEMONSTR"), PDP datagrams
+ *   same Wi-Fi - UDP broadcast / unicast on port 7777 through an access point
+ * ====================================================================== */
+#include <psp2/sysmodule.h>
+#include <psp2/net/net.h>
+#include <psp2/net/netctl.h>
+#include <psp2/pspnet_adhoc.h>
+#include <psp2/pspnet_adhocctl.h>
+#include <psp2/netcheck_dialog.h>
+#include <psp2/common_dialog.h>
+#include <psp2/gxm.h>
+#include "netplay.h"
+
+#define NET_PORT 7777
+#define ADHOC_PORT 0x4453
+enum { NET_OFF, NET_ADHOC, NET_INET };
+static int net_kind;
+static int pdp = -1, sock = -1, have_peer;
+static SceNetEtherAddr my_mac, peer_mac;
+static uint32_t my_ip, my_bcast, peer_ip;
+static uint16_t peer_port;
+static int in_lobby, lobby_hosting;
+static uint32_t lobby_prev, lobby_drawn;
+
+static void banner(uint32_t *d) {
+    fill(d, 0, SH - 52, SW, 52, 0xe0201008);
+    text(d, 40, SH - 44, net_msg, 0xff40e0ff, 0);
+}
+
+static void draw_lobby(void) {
+    uint32_t *d = fb[fbi];
+    fill(d, 0, 0, SW, SH, 0xff100404);
+    fill(d, 0, 0, SW, 70, 0xff201010);
+    text(d, 40, 20, "DEMONSTAR  -  two-Vita play", 0xff3050ff, 0);
+    text(d, 40, 110, net_kind == NET_ADHOC ? "Ad-hoc (no router needed)" : "Same Wi-Fi network", 0xffb0b0b0, 0);
+    text(d, 40, 150, lobby_hosting ? "This Vita is PLAYER 1 (host)" : "This Vita is PLAYER 2", 0xffffffff, 0);
+    text(d, 40, 240, net_msg, 0xff40e0ff, 0);
+    text(d, 40, 330, lobby_hosting ? "On the other Vita: start DemonStar, Play mode = join, then press Cross."
+                                   : "On the other Vita: start DemonStar, Play mode = host, pick the game.", 0xffb0b0b0, 1);
+    text(d, 40, 352, "Both Vitas need the same game files in ux0:data/DemonStar.", 0xffb0b0b0, 1);
+    text(d, 40, 440, "Circle = cancel", 0xffc0c0c0, 0);
+}
+
+void message_screen(const char *title, const char *msg) {
+    uint32_t *d = fb[fbi];
+    fill(d, 0, 0, SW, SH, 0xff100404);
+    fill(d, 0, 0, SW, 70, 0xff201010);
+    text(d, 40, 20, title, 0xff3050ff, 0);
+    /* (long messages wrap at ~60 characters) */
+    char line[64]; const char *s = msg; int y = 140;
+    while (*s && y < 400) {
+        int n = (int)strlen(s);
+        if (n > 60) { n = 60; while (n > 30 && s[n] != ' ') n--; }
+        memcpy(line, s, n); line[n] = 0;
+        text(d, 40, y, line, 0xffffffff, 0);
+        s += n; while (*s == ' ') s++;
+        y += 40;
+    }
+    text(d, 40, 460, "Press Cross or START", 0xffc0c0c0, 0);
+    flip();
+    SceCtrlData pad; uint32_t prev = ~0u;
+    sceKernelDelayThread(300000);
+    for (;;) {
+        sceCtrlPeekBufferPositive(0, &pad, 1);
+        uint32_t pr = pad.buttons & ~prev; prev = pad.buttons;
+        if (pr & (SCE_CTRL_CROSS | SCE_CTRL_START | SCE_CTRL_CIRCLE)) break;
+        sceKernelDelayThread(16000);
+    }
+}
+
+/* ---- minimal GXM, only so the system's ad-hoc dialog can be drawn ---- */
+static int gxm_state;
+static SceGxmSyncObject *gsync[NFB];
+typedef struct { void *addr; } dq_data;
+static void dq_callback(const void *data) {
+    SceDisplayFrameBuf f = {sizeof f, ((const dq_data *)data)->addr, SW, SCE_DISPLAY_PIXELFORMAT_A8B8G8R8, SW, SH};
+    sceDisplaySetFrameBuf(&f, SCE_DISPLAY_SETBUF_NEXTFRAME);
+    sceDisplayWaitVblankStart();
+}
+static void *dlg_depth;
+static int gxm_up(void) {
+    if (gxm_state) return gxm_state > 0;
+    gxm_state = -1;
+    SceGxmInitializeParams p;
+    memset(&p, 0, sizeof p);
+    p.displayQueueMaxPendingCount = 2;
+    p.displayQueueCallback = dq_callback;
+    p.displayQueueCallbackDataSize = sizeof(dq_data);
+    int r = -1;
+    for (uint32_t size = 4 * 1024 * 1024; size >= 0x40000 && r < 0; size /= 2) {
+        p.parameterBufferSize = size;
+        r = sceGxmInitialize(&p);
+        rt_log("net: sceGxmInitialize(%u KB) 0x%08x\n", size / 1024, r);
+    }
+    if (r < 0) return 0;
+    uint32_t sz = (SW * SH * 4 + 0x3ffff) & ~0x3ffff;
+    for (int k = 0; k < NFB; k++) {
+        r = sceGxmMapMemory(fb[k], sz, SCE_GXM_MEMORY_ATTRIB_RW);
+        if (r < 0) { rt_log("net: sceGxmMapMemory 0x%08x\n", r); return 0; }
+        sceGxmSyncObjectCreate(&gsync[k]);
+    }
+    uint32_t dsz = (SW * SH * 4 + 0x3ffff) & ~0x3ffff;
+    SceUID id = sceKernelAllocMemBlock("dlgdepth", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE, dsz, NULL);
+    if (id < 0) return 0;
+    sceKernelGetMemBlockBase(id, &dlg_depth);
+    if (sceGxmMapMemory(dlg_depth, dsz, SCE_GXM_MEMORY_ATTRIB_RW) < 0) return 0;
+    gxm_state = 1;
+    return 1;
+}
+
+/* runs the ad-hoc connection dialog; returns 1 when this Vita is in a group */
+static int adhoc_dialog(char *err, int errlen) {
+    if (!gxm_up()) { snprintf(err, errlen, "Could not start the graphics for the system dialog."); return 0; }
+    SceNetAdhocctlGroupName group;
+    memset(&group, 0, sizeof group);
+    memcpy(group.data, "DEMONSTR", 8);
+    SceNetCheckDialogParam p;
+    sceNetCheckDialogParamInit(&p);
+    p.mode = SCE_NETCHECK_DIALOG_MODE_PSP_ADHOC_CONN;
+    p.groupName = &group;
+    memcpy(p.npCommunicationId.data, "DMST00001", 9);
+    p.npCommunicationId.term = 0;
+    p.npCommunicationId.num = 0;
+    p.timeoutUs = 0;
+    int r = sceNetCheckDialogInit(&p);
+    rt_log("net: sceNetCheckDialogInit 0x%08x\n", r);
+    if (r < 0) { snprintf(err, errlen, "The system's ad-hoc dialog did not open (0x%08x).", r); return 0; }
+    int prev = (fbi + NFB - 1) % NFB, status;
+    snprintf(net_msg, sizeof net_msg, "Connecting...");
+    for (;;) {
+        status = sceNetCheckDialogGetStatus();
+        if (status == SCE_COMMON_DIALOG_STATUS_FINISHED || status < 0) break;
+        draw_lobby();
+        SceCommonDialogUpdateParam u;
+        memset(&u, 0, sizeof u);
+        u.renderTarget.colorFormat = SCE_GXM_COLOR_FORMAT_A8B8G8R8;
+        u.renderTarget.surfaceType = SCE_GXM_COLOR_SURFACE_LINEAR;
+        u.renderTarget.width = SW;
+        u.renderTarget.height = SH;
+        u.renderTarget.strideInPixels = SW;
+        u.renderTarget.colorSurfaceData = fb[fbi];
+        u.renderTarget.depthSurfaceData = dlg_depth;
+        u.displaySyncObject = gsync[fbi];
+        sceCommonDialogUpdate(&u);
+        dq_data dd = {fb[fbi]};
+        sceGxmDisplayQueueAddEntry(gsync[prev], gsync[fbi], &dd);
+        prev = fbi;
+        fbi = (fbi + 1) % NFB;
+    }
+    sceGxmDisplayQueueFinish();
+    SceNetCheckDialogResult res;
+    memset(&res, 0, sizeof res);
+    r = sceNetCheckDialogGetResult(&res);
+    sceNetCheckDialogTerm();
+    rt_log("net: dialog status %d, GetResult 0x%08x, result %d\n", status, r, res.result);
+    if (r < 0 || res.result != SCE_COMMON_DIALOG_RESULT_OK) {
+        snprintf(err, errlen, res.result == SCE_COMMON_DIALOG_RESULT_USER_CANCELED ? "Cancelled." :
+                 "The Vita did not join an ad-hoc group. Is Wi-Fi switched on (flight mode off)?");
+        return 0;
+    }
+    return 1;
+}
+
+static int net_lib_up(char *err, int errlen) {
+    static int done;
+    if (done) return 1;
+    sceSysmoduleLoadModule(SCE_SYSMODULE_NET);
+    int r = sceNetShowNetstat();
+    if (r == (int)SCE_NET_ERROR_ENOTINIT) {
+        static SceNetInitParam p;
+        p.size = 1024 * 1024;
+        p.memory = malloc(p.size);
+        p.flags = 0;
+        r = sceNetInit(&p);
+        rt_log("net: sceNetInit 0x%08x\n", r);
+        if (r < 0) { snprintf(err, errlen, "The network library did not start (0x%08x).", r); return 0; }
+    }
+    r = sceNetCtlInit();
+    rt_log("net: sceNetCtlInit 0x%08x\n", r);
+    done = 1;
+    return 1;
+}
+
+static void net_close(void) {
+    if (pdp >= 0) { sceNetAdhocPdpDelete(pdp, 0); pdp = -1; }
+    if (net_kind == NET_ADHOC) {
+        sceNetCtlAdhocDisconnect();
+        sceNetAdhocctlTerm();
+        sceNetAdhocTerm();
+    }
+    if (sock >= 0) { sceNetSocketClose(sock); sock = -1; }
+    net_kind = NET_OFF;
+    have_peer = 0;
+}
+
+static int net_open(int adhoc, char *err, int errlen) {
+    have_peer = 0;
+    if (!net_lib_up(err, errlen)) return 0;
+    if (adhoc) {
+        net_kind = NET_ADHOC;
+        sceSysmoduleLoadModule(SCE_SYSMODULE_PSPNET_ADHOC);
+        int r = sceNetAdhocInit();
+        rt_log("net: sceNetAdhocInit 0x%08x\n", r);
+        SceNetAdhocctlAdhocId id;
+        memset(&id, 0, sizeof id);
+        id.type = SCE_NET_ADHOCCTL_ADHOCTYPE_RESERVED;
+        memcpy(id.data, "DMST00001", SCE_NET_ADHOCCTL_ADHOCID_LEN);
+        r = sceNetAdhocctlInit(&id);
+        rt_log("net: sceNetAdhocctlInit 0x%08x\n", r);
+        if (!adhoc_dialog(err, errlen)) { net_close(); return 0; }
+        memset(&my_mac, 0, sizeof my_mac);
+        sceNetAdhocctlGetEtherAddr(&my_mac);
+        pdp = sceNetAdhocPdpCreate(&my_mac, ADHOC_PORT, 0x4000, 0);
+        rt_log("net: PDP 0x%08x, MAC %02x:%02x:%02x:%02x:%02x:%02x\n", pdp, my_mac.data[0], my_mac.data[1], my_mac.data[2],
+               my_mac.data[3], my_mac.data[4], my_mac.data[5]);
+        if (pdp < 0) { snprintf(err, errlen, "Could not open the ad-hoc socket (0x%08x).", pdp); net_close(); return 0; }
+        return 1;
+    }
+    net_kind = NET_INET;
+    int state = 0;
+    sceNetCtlInetGetState(&state);
+    if (state != SCE_NETCTL_STATE_CONNECTED) {
+        snprintf(err, errlen, "This Vita is not connected to Wi-Fi. Connect both Vitas to the same network in Settings, or use ad-hoc.");
+        net_kind = NET_OFF;
+        return 0;
+    }
+    SceNetCtlInfo info;
+    memset(&info, 0, sizeof info);
+    sceNetCtlInetGetInfo(SCE_NETCTL_INFO_GET_IP_ADDRESS, &info);
+    sceNetInetPton(SCE_NET_AF_INET, info.ip_address, &my_ip);
+    {
+        SceNetCtlInfo nm; uint32_t mask = 0;
+        memset(&nm, 0, sizeof nm);
+        if (sceNetCtlInetGetInfo(SCE_NETCTL_INFO_GET_NETMASK, &nm) >= 0 && sceNetInetPton(SCE_NET_AF_INET, nm.netmask, &mask) > 0)
+            my_bcast = my_ip | ~mask;
+    }
+    sock = sceNetSocket("demonstar", SCE_NET_AF_INET, SCE_NET_SOCK_DGRAM, 0);
+    if (sock < 0) { snprintf(err, errlen, "Could not open a network socket (0x%08x).", sock); net_kind = NET_OFF; return 0; }
+    int one = 1;
+    sceNetSetsockopt(sock, SCE_NET_SOL_SOCKET, SCE_NET_SO_BROADCAST, &one, sizeof one);
+    sceNetSetsockopt(sock, SCE_NET_SOL_SOCKET, SCE_NET_SO_NBIO, &one, sizeof one);
+    SceNetSockaddrIn a;
+    memset(&a, 0, sizeof a);
+    a.sin_len = sizeof a;
+    a.sin_family = SCE_NET_AF_INET;
+    a.sin_port = sceNetHtons(NET_PORT);
+    a.sin_addr.s_addr = SCE_NET_INADDR_ANY;
+    int r = sceNetBind(sock, (SceNetSockaddr *)&a, sizeof a);
+    rt_log("net: UDP socket %d bind 0x%08x, my IP %s\n", sock, r, info.ip_address);
+    if (r < 0) { snprintf(err, errlen, "Could not open port %d (0x%08x).", NET_PORT, r); net_close(); return 0; }
+    return 1;
+}
+
+/* the packet that fixes the peer: a HELLO for the host, INFO / REJECT for the joiner */
+static int peer_packet(const void *buf, int len) {
+    const uint8_t *b = buf;
+    if (len < 8 || *(const uint32_t *)b != 0x504e5344u) return 0;
+    return lobby_hosting ? b[4] == 1 : (b[4] == 2 || b[4] == 3);
+}
+
+int host_net_send(const void *buf, int len) {
+    if (net_kind == NET_ADHOC && pdp >= 0) {
+        if (have_peer) return sceNetAdhocPdpSend(pdp, &peer_mac, ADHOC_PORT, buf, len, 0, SCE_NET_ADHOC_F_NONBLOCK);
+        /* no peer yet: broadcast, and also send to everyone in the group */
+        SceNetEtherAddr bc;
+        memset(bc.data, 0xff, 6);
+        sceNetAdhocPdpSend(pdp, &bc, ADHOC_PORT, buf, len, 0, SCE_NET_ADHOC_F_NONBLOCK);
+        static SceNetAdhocctlPeerInfo peers[8];
+        int blen = sizeof peers;
+        memset(peers, 0, sizeof peers);
+        if (sceNetAdhocctlGetPeerList(&blen, peers) >= 0)
+            for (int k = 0; k < blen / (int)sizeof peers[0] && k < 8; k++)
+                if (memcmp(peers[k].macAddr.data, my_mac.data, 6))
+                    sceNetAdhocPdpSend(pdp, &peers[k].macAddr, ADHOC_PORT, buf, len, 0, SCE_NET_ADHOC_F_NONBLOCK);
+        return len;
+    }
+    if (net_kind == NET_INET && sock >= 0) {
+        SceNetSockaddrIn a;
+        memset(&a, 0, sizeof a);
+        a.sin_len = sizeof a;
+        a.sin_family = SCE_NET_AF_INET;
+        a.sin_port = have_peer ? peer_port : sceNetHtons(NET_PORT);
+        a.sin_addr.s_addr = have_peer ? peer_ip : SCE_NET_INADDR_BROADCAST;
+        int r = sceNetSendto(sock, buf, len, 0, (SceNetSockaddr *)&a, sizeof a);
+        if (!have_peer && my_bcast && my_bcast != SCE_NET_INADDR_BROADCAST) {
+            a.sin_addr.s_addr = my_bcast;
+            sceNetSendto(sock, buf, len, 0, (SceNetSockaddr *)&a, sizeof a);
+        }
+        return r;
+    }
+    return -1;
+}
+
+/* non-blocking; the first packet of this port from another console fixes the peer */
+int host_net_recv(void *buf, int max) {
+    for (;;) {
+        if (net_kind == NET_ADHOC && pdp >= 0) {
+            SceNetEtherAddr from;
+            SceUShort16 port = 0;
+            int len = max;
+            int r = sceNetAdhocPdpRecv(pdp, &from, &port, buf, &len, 0, SCE_NET_ADHOC_F_NONBLOCK);
+            if (r < 0 || len <= 0) return 0;
+            if (!memcmp(from.data, my_mac.data, 6)) continue;
+            if (!have_peer) { if (!peer_packet(buf, len)) continue; peer_mac = from; have_peer = 1; }
+            else if (memcmp(from.data, peer_mac.data, 6)) continue;
+            return len;
+        }
+        if (net_kind == NET_INET && sock >= 0) {
+            SceNetSockaddrIn from;
+            unsigned int fl = sizeof from;
+            int r = sceNetRecvfrom(sock, buf, max, SCE_NET_MSG_DONTWAIT, (SceNetSockaddr *)&from, &fl);
+            if (r <= 0) return 0;
+            if (from.sin_addr.s_addr == my_ip) continue;
+            if (!have_peer) {
+                if (!peer_packet(buf, r)) continue;
+                peer_ip = from.sin_addr.s_addr; peer_port = from.sin_port; have_peer = 1;
+            } else if (from.sin_addr.s_addr != peer_ip) continue;
+            return r;
+        }
+        return 0;
+    }
+}
+
+int host_net_cancelled(void) {
+    if (!in_lobby) return 0;
+    SceCtrlData pad;
+    sceCtrlPeekBufferPositive(0, &pad, 1);
+    uint32_t pr = pad.buttons & ~lobby_prev;
+    lobby_prev = pad.buttons;
+    uint32_t now = host_ticks_ms();
+    if (now - lobby_drawn >= 33) { lobby_drawn = now; draw_lobby(); flip(); }
+    sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+    return (pr & SCE_CTRL_CIRCLE) != 0;
+}
+
+void host_net_status(const char *msg, int ms) {
+    if (!msg) { net_msg[0] = 0; return; }
+    snprintf(net_msg, sizeof net_msg, "%s", msg);
+    net_msg_until = ms ? host_ticks_ms() + ms : 0;
+    if (in_lobby) { lobby_drawn = 0; host_net_cancelled(); return; }
+    /* in game: put it on the frame being shown (nothing new is drawn while waiting) */
+    banner(fb[(fbi + NFB - 1) % NFB]);
+}
+
+void host_net_end(const char *why) {
+    in_lobby = 0;
+    char m[160];
+    snprintf(m, sizeof m, "The two-Vita game has ended: %s.", why);
+    message_screen("DEMONSTAR  -  two-Vita play", m);
+    net_close();
+}
+
+/* hosting: g is the game picked; joining: g is ignored.  Returns the game to run or -1. */
+static int net_session(int mode, int g, char *err, int errlen) {
+    int adhoc = mode == 1 || mode == 2, hosting = mode == 1 || mode == 3;
+    lobby_hosting = hosting;
+    net_kind = adhoc ? NET_ADHOC : NET_INET;
+    if (!net_open(adhoc, err, errlen)) return -1;
+    SceCtrlData pad;
+    sceCtrlPeekBufferPositive(0, &pad, 1);
+    lobby_prev = pad.buttons;
+    in_lobby = 1;
+    int r = hosting ? (np_host(g, &opts, err, errlen) < 0 ? -1 : g) : np_join(&opts, err, errlen);
+    in_lobby = 0;
+    net_msg[0] = 0;
+    if (r < 0) net_close();
+    return r;
+}

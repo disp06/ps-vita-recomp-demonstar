@@ -62,7 +62,7 @@ static qmsg_t q[256]; static int qh, qt;
 void win_post(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp) {
     int n = (qt + 1) & 255;
     if (n == qh) return;
-    q[qt].hwnd = hwnd; q[qt].msg = msg; q[qt].wp = wp; q[qt].lp = lp; q[qt].time = host_ticks_ms();
+    q[qt].hwnd = hwnd; q[qt].msg = msg; q[qt].wp = wp; q[qt].lp = lp; q[qt].time = rt_ms();
     qt = n;
 }
 uint32_t win_send(uint32_t hwnd, uint32_t msg, uint32_t wp, uint32_t lp) {
@@ -315,7 +315,7 @@ static int take_msg(uint32_t p, int remove) {
         return 1;
     }
     if (quit_posted) {
-        qmsg_t m = {0, WM_QUIT, quit_code, 0, host_ticks_ms()};
+        qmsg_t m = {0, WM_QUIT, quit_code, 0, rt_ms()};
         write_msg(p, &m);
         if (remove) quit_posted = 0;
         return 1;
@@ -332,14 +332,14 @@ SHIM(USER32, GetMessageA, 4) {
     for (;;) {
         win_pump_host();
         if (take_msg(p, 1)) return rd32(p + 4) == WM_QUIT ? 0 : 1;
-        host_sleep_ms(1);
+        if (g_netplay) rt_advance_us(1000); else host_sleep_ms(1);
     }
 }
 SHIM(USER32, TranslateMessage, 1) { return 1; }
 SHIM(USER32, DispatchMessageA, 1) {
     uint32_t p = ARG(0);
     uint32_t h = rd32(p), m = rd32(p + 4), wp = rd32(p + 8), lp = rd32(p + 12);
-    if (m == WM_TIMER && lp) { uint32_t a[4] = {h, m, wp, host_ticks_ms()}; guest_call(lp, 4, a); return 0; }
+    if (m == WM_TIMER && lp) { uint32_t a[4] = {h, m, wp, rt_ms()}; guest_call(lp, 4, a); return 0; }
     if (!h) return 0;
     return win_send(h, m, wp, lp);
 }
@@ -409,7 +409,7 @@ static utimer_t utim[16];
 int user_set_timer(uint32_t hwnd, uint32_t id, uint32_t ms, uint32_t proc) {
     for (int k = 0; k < 16; k++) if (utim[k].used && utim[k].hwnd == hwnd && utim[k].id == id) { utim[k].ms = ms; utim[k].proc = proc; return id; }
     for (int k = 0; k < 16; k++) if (!utim[k].used) {
-        utim[k] = (utimer_t){hwnd, id ? id : (uint32_t)(k + 1), ms ? ms : 1, proc, host_ticks_ms() + ms, 1};
+        utim[k] = (utimer_t){hwnd, id ? id : (uint32_t)(k + 1), ms ? ms : 1, proc, rt_ms() + ms, 1};
         return utim[k].id;
     }
     return 0;
@@ -418,7 +418,7 @@ void user_kill_timer(uint32_t hwnd, uint32_t id) {
     for (int k = 0; k < 16; k++) if (utim[k].used && utim[k].hwnd == hwnd && utim[k].id == id) utim[k].used = 0;
 }
 static void user_timers(void) {
-    uint32_t now = host_ticks_ms();
+    uint32_t now = rt_ms();
     for (int k = 0; k < 16; k++) if (utim[k].used && (int32_t)(now - utim[k].next) >= 0) {
         utim[k].next = now + utim[k].ms;
         int dup = 0;
@@ -463,7 +463,8 @@ host_input_t g_last_input;
 void win_pump_host(void) {
     host_input_t in;
     memset(&in, 0, sizeof in);
-    host_poll(&in);
+    extern void rt_poll_input(host_input_t *);
+    rt_poll_input(&in);
     static uint32_t quit_time;
     if (in.quit && !app_quit_requested) {
         app_quit_requested = 1;

@@ -12,6 +12,9 @@ typedef struct {
     int pan;
     int primary;
     int refs;
+    /* netplay: what the game sees of playback comes from the virtual clock,
+       not from the mixer thread (which runs on real time) */
+    int vplaying; uint64_t vstart_us; uint32_t vpos0;
 } sbuf_t;
 #define MAXB 128
 static sbuf_t bufs[MAXB];
@@ -88,11 +91,24 @@ METHOD(b_release, 1) {
     return 0;
 }
 METHOD(b_getcaps, 2) { sbuf_t *b = B(ARG(0)); uint32_t c = ARG(1); wr32(c + 4, 0xe0); wr32(c + 8, b ? b->size : 0); return DS_OK; }
+static uint32_t vframes(sbuf_t *b) { int fs = b->channels * b->bits / 8; return fs ? b->size / fs : 0; }
+/* virtual play position in frames; ends a non-looping buffer */
+static uint32_t vpos(sbuf_t *b) {
+    uint32_t nfr = vframes(b);
+    if (!b->vplaying || !nfr) return b->vpos0;
+    uint64_t el = (rt_us() - b->vstart_us) * b->freq / 1000000u;
+    uint64_t p = b->vpos0 + el;
+    if (b->loop) return (uint32_t)(p % nfr);
+    if (p >= nfr) { b->vplaying = 0; b->vpos0 = 0; return 0; }
+    return (uint32_t)p;
+}
+static void vrebase(sbuf_t *b) { uint32_t p = vpos(b); b->vpos0 = p; b->vstart_us = rt_us(); }
+static uint32_t cur_frame(sbuf_t *b) { return g_netplay ? vpos(b) : (uint32_t)(b->pos >> 32); }
 METHOD(b_getpos, 3) {
     sbuf_t *b = B(ARG(0));
     if (!b) return DSERR_GENERIC;
     int fs = b->channels * b->bits / 8;
-    uint32_t p = b->size ? (uint32_t)((b->pos >> 32) * fs) % b->size : 0;
+    uint32_t p = b->size ? (cur_frame(b) * fs) % b->size : 0;
     if (ARG(1)) wr32(ARG(1), p);
     if (ARG(2)) wr32(ARG(2), b->size ? (p + 1024 * fs) % b->size : 0);
     return DS_OK;
@@ -107,7 +123,12 @@ METHOD(b_getformat, 4) {
 METHOD(b_getvolume, 2) { sbuf_t *b = B(ARG(0)); wr32(ARG(1), b ? b->vol : 0); return DS_OK; }
 METHOD(b_getpan, 2) { sbuf_t *b = B(ARG(0)); wr32(ARG(1), b ? b->pan : 0); return DS_OK; }
 METHOD(b_getfreq, 2) { sbuf_t *b = B(ARG(0)); wr32(ARG(1), b ? b->freq : 0); return DS_OK; }
-METHOD(b_getstatus, 2) { sbuf_t *b = B(ARG(0)); wr32(ARG(1), b && b->playing ? (1 | (b->loop ? 4 : 0)) : 0); return DS_OK; }
+METHOD(b_getstatus, 2) {
+    sbuf_t *b = B(ARG(0));
+    int pl = b && (g_netplay ? (vpos(b), b->vplaying) : b->playing);
+    wr32(ARG(1), pl ? (1 | (b->loop ? 4 : 0)) : 0);
+    return DS_OK;
+}
 METHOD(b_init, 3) { return DS_OK; }
 METHOD(b_lock, 8) {
     sbuf_t *b = B(ARG(0));
@@ -115,7 +136,7 @@ METHOD(b_lock, 8) {
     uint32_t off = ARG(1), n = ARG(2), flags = ARG(7);
     if (b->primary || !b->size) { wr32(ARG(3), 0); wr32(ARG(4), 0); if (ARG(5)) wr32(ARG(5), 0); if (ARG(6)) wr32(ARG(6), 0); return DS_OK; }
     if (flags & 2) { off = 0; n = b->size; }
-    if (flags & 1) { uint32_t p; int fs = b->channels * b->bits / 8; p = (uint32_t)((b->pos >> 32) * fs) % b->size; off = (p + 1024 * fs) % b->size; }
+    if (flags & 1) { uint32_t p; int fs = b->channels * b->bits / 8; p = (cur_frame(b) * fs) % b->size; off = (p + 1024 * fs) % b->size; }
     off %= b->size;
     if (n > b->size) n = b->size;
     uint32_t n1 = n, n2 = 0;
@@ -129,9 +150,7 @@ METHOD(b_play, 4) {
     sbuf_t *b = B(ARG(0));
     if (!b) return DSERR_GENERIC;
     host_audio_lock();
-    if (!b->playing) {
-        if (!b->loop) {}
-    }
+    if (g_netplay) { if (!b->vplaying) { b->vplaying = 1; b->vstart_us = rt_us(); } else vrebase(b); }
     b->playing = 1; b->loop = ARG(3) & 1;
     host_audio_unlock();
     return DS_OK;
@@ -141,13 +160,18 @@ METHOD(b_setpos, 2) {
     if (!b) return DSERR_GENERIC;
     int fs = b->channels * b->bits / 8;
     host_audio_lock(); b->pos = (uint64_t)(ARG(1) / fs) << 32; host_audio_unlock();
+    b->vpos0 = ARG(1) / fs; b->vstart_us = rt_us();
     return DS_OK;
 }
 METHOD(b_setformat, 2) { return DS_OK; }
 METHOD(b_setvolume, 2) { sbuf_t *b = B(ARG(0)); if (b) b->vol = (int32_t)ARG(1); return DS_OK; }
 METHOD(b_setpan, 2) { sbuf_t *b = B(ARG(0)); if (b) b->pan = (int32_t)ARG(1); return DS_OK; }
-METHOD(b_setfreq, 2) { sbuf_t *b = B(ARG(0)); if (b) b->freq = ARG(1) ? ARG(1) : b->rate; return DS_OK; }
-METHOD(b_stop, 1) { sbuf_t *b = B(ARG(0)); if (b) { host_audio_lock(); b->playing = 0; host_audio_unlock(); } return DS_OK; }
+METHOD(b_setfreq, 2) { sbuf_t *b = B(ARG(0)); if (b) { if (g_netplay) vrebase(b); b->freq = ARG(1) ? ARG(1) : b->rate; } return DS_OK; }
+METHOD(b_stop, 1) {
+    sbuf_t *b = B(ARG(0));
+    if (b) { if (g_netplay) { b->vpos0 = vpos(b); b->vplaying = 0; } host_audio_lock(); b->playing = 0; host_audio_unlock(); }
+    return DS_OK;
+}
 METHOD(b_unlock, 5) { return DS_OK; }
 METHOD(b_restore, 1) { return DS_OK; }
 

@@ -8,7 +8,7 @@ static regval_t regv[256]; static int nregv;
 static char keys[64][160]; static int nkeys;
 static int reg_dirty;
 
-static void reg_path(char *dst) { snprintf(dst, 512, "%s/registry.txt", host_save_dir()); }
+static void reg_path(char *dst) { snprintf(dst, 512, "%s/registry.txt", rt_save_dir()); }
 void reg_load(void) {
     char p[512]; reg_path(p);
     FILE *f = fopen(p, "r");

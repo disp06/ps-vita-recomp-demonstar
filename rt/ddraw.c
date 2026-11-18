@@ -171,6 +171,7 @@ METHOD(dd_setdisplaymode1, 4) { return setmode(ARG(1), ARG(2), ARG(3)); }
 METHOD(dd_setdisplaymode2, 6) { return setmode(ARG(1), ARG(2), ARG(3)); }
 METHOD(dd_waitvb, 3) {
     static uint32_t last;
+    if (g_netplay) { rt_advance_us(16667); return DD_OK; }
     uint32_t now = host_ticks_ms();
     if (now - last < 14) host_sleep_ms(14 - (now - last));
     last = host_ticks_ms();

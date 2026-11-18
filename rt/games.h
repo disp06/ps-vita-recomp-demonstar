@@ -14,6 +14,7 @@ typedef struct {
     int aspect;            /* 0 = 4:3, 1 = full screen stretch, 2 = original square pixels */
     int ds1_difficulty;    /* -1 keep, 0..3 */
     int smooth;            /* 0 nearest, 1 smooth (bilinear-ish) */
+    int netplay;           /* set by the netplay session */
 } launch_opts;
 
 int game_main(int idx, const launch_opts *opt);

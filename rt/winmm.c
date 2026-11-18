@@ -2,7 +2,7 @@
 #include "win32.h"
 #include "synth.h"
 
-SHIM(WINMM, timeGetTime, 0) { winmm_service(); return host_ticks_ms(); }
+SHIM(WINMM, timeGetTime, 0) { rt_advance_us(100); winmm_service(); return rt_ms(); }
 SHIM(WINMM, timeBeginPeriod, 1) { return 0; }
 SHIM(WINMM, timeEndPeriod, 1) { return 0; }
 SHIM(WINMM, timeGetDevCaps, 2) { wr32(ARG(0), 1); wr32(ARG(0) + 4, 1000000); return 0; }
@@ -11,7 +11,7 @@ typedef struct { int used; uint32_t delay, cb, user, flags, next, id; } mmtimer_
 static mmtimer_t mmt[16];
 SHIM(WINMM, timeSetEvent, 5) {
     for (int k = 0; k < 16; k++) if (!mmt[k].used) {
-        mmt[k] = (mmtimer_t){1, ARG(0) ? ARG(0) : 1, ARG(2), ARG(3), ARG(4), host_ticks_ms() + ARG(0), (uint32_t)(k + 1)};
+        mmt[k] = (mmtimer_t){1, ARG(0) ? ARG(0) : 1, ARG(2), ARG(3), ARG(4), rt_ms() + ARG(0), (uint32_t)(k + 1)};
         rt_log("timeSetEvent(%u ms, cb=%08x, flags=%x) -> %d\n", ARG(0), ARG(2), ARG(4), k + 1);
         return k + 1;
     }
@@ -163,14 +163,14 @@ SHIM(WINMM, midiStreamOut, 3) {
     return 0;
 }
 SHIM(WINMM, midiStreamRestart, 1) {
-    if (!ms.playing) { ms.playing = 1; ms.next_ms = host_ticks_us() / 1000.0; ms.have_delta = 0; }
+    if (!ms.playing) { ms.playing = 1; ms.next_ms = rt_us() / 1000.0; ms.have_delta = 0; }
     return 0;
 }
 SHIM(WINMM, midiStreamPause, 1) { ms.playing = 0; synth_all_notes_off(); return 0; }
 
 static void stream_service(void) {
     if (!ms.open || !ms.playing) return;
-    double now = host_ticks_us() / 1000.0;
+    double now = rt_us() / 1000.0;
     int guard = 0;
     while (ms.qn > 0 && guard++ < 4096) {
         uint32_t h = ms.queue[0];
@@ -213,7 +213,7 @@ static int in_service;
 void winmm_service(void) {
     if (in_service) return;
     in_service = 1;
-    uint32_t now = host_ticks_ms();
+    uint32_t now = rt_ms();
     for (int k = 0; k < 16; k++) {
         if (!mmt[k].used) continue;
         int fires = 0;

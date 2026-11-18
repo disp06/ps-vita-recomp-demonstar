@@ -22,14 +22,14 @@ void dinput_update(const host_input_t *in) {
         if (dik[m[k].sc] != v) {
             dik[m[k].sc] = v;
             int n = (et + 1) & 127;
-            if (n != eh) { evq[et] = (dievt_t){m[k].sc, v, host_ticks_ms(), seqn++}; et = n; }
+            if (n != eh) { evq[et] = (dievt_t){m[k].sc, v, rt_ms(), seqn++}; et = n; }
         }
     }
 }
 
 void dinput_key_event(uint8_t sc, int down) {
     int n = (et + 1) & 127;
-    if (n != eh) { evq[et] = (dievt_t){sc, down ? 0x80u : 0u, host_ticks_ms(), seqn++}; et = n; }
+    if (n != eh) { evq[et] = (dievt_t){sc, down ? 0x80u : 0u, rt_ms(), seqn++}; et = n; }
 }
 typedef struct { uint32_t obj; int kind; } dev_t_;
 METHOD(dv_qi, 3) {

@@ -40,15 +40,30 @@ int game_main(int idx, const launch_opts *opt) {
         reg_seed_dword("HKCU\\Software\\Mountain King Studios\\DemonStar", "OptDifficulty", opt->ds1_difficulty);
     {
         extern uint32_t reg_get_dword(const char *key, const char *name, uint32_t def);
-        host_input_t in; memset(&in, 0, sizeof in); host_poll(&in);
+        host_input_t in; memset(&in, 0, sizeof in); extern void rt_poll_input(host_input_t *); rt_poll_input(&in);
         rt_log("player 2 controller: %s\n", in.p2_present ? "connected" : "not connected");
+        if (idx == 0) {
+            /* DemonStar: input types 0 keyboard, 1 mouse, 2 joystick 1, 3 joystick 2, 4 none;
+               joystick buttons are bit masks.  Player 2 = joystick 2. */
+            const char *k = "HKCU\\Software\\Mountain King Studios\\DemonStar";
+            if (in.p2_present) {
+                reg_seed_dword(k, "OptPlayer2DefInput", 3);
+                reg_seed_dword(k, "JoyType2", 1);
+                reg_seed_dword(k, "Joy2Shoot", 1); reg_seed_dword(k, "Joy2Bomb", 2);
+                reg_seed_dword(k, "Joy2Start", 4); reg_seed_dword(k, "Joy2Special", 8);
+                uint32_t p1 = reg_get_dword(k, "OptPlayer1DefInput", 0);
+                if (p1 == 2 || p1 == 3) reg_seed_dword(k, "OptPlayer1DefInput", 0);
+            } else if (reg_get_dword(k, "OptPlayer2DefInput", 4) == 3) reg_seed_dword(k, "OptPlayer2DefInput", 4);
+        }
         if (idx == 1) {
             const char *k = "HKCU\\Software\\Mountain King Studios\\DemonStarSM1";
             if (in.p2_present) {
-                /* SM1 input types: 0 keyboard, 1 mouse, 2 joystick 1, 3 joystick 2.
-                   The Bluetooth pad is its joystick 1: give it to player 2 and keep
-                   player 1 on the Vita's own controls (keyboard mapping). */
+                /* SM1 input types: 0 keyboard, 1 mouse, 2 joystick 1, 3 joystick 2; buttons are
+                   numbers.  The pad is its joystick 1: give it to player 2, keep player 1 on
+                   the Vita's own controls (keyboard mapping). */
                 reg_seed_dword(k, "OptPlayer2DefInput", 2);
+                reg_seed_dword(k, "Joy1Shoot", 0); reg_seed_dword(k, "Joy1Bomb", 1);
+                reg_seed_dword(k, "Joy1Start", 2); reg_seed_dword(k, "Joy1Special", 3);
                 if (reg_get_dword(k, "OptPlayer1DefInput", 0) >= 2) reg_seed_dword(k, "OptPlayer1DefInput", 0);
             } else {
                 if (reg_get_dword(k, "OptPlayer2DefInput", 0) >= 2) reg_seed_dword(k, "OptPlayer2DefInput", 0);

@@ -125,4 +125,12 @@ uint32_t make_vtable(void (**fns)(void), int n);
 
 void rt_log(const char *fmt, ...);
 void rt_spin_poll(void);
+/* game-visible clock: real time normally; in netplay a virtual clock that
+   advances only at deterministic points (identical on both Vitas) */
+extern int g_netplay;
+uint64_t rt_us(void);
+uint32_t rt_ms(void);
+void rt_advance_us(uint32_t us);
+const char *rt_save_dir(void);
+extern char g_save_dir_override[256];
 extern int rt_trace;

@@ -78,6 +78,39 @@ The pad shows up in both games as a joystick and is given to player 2.
   Secret Missions 1: choose Start Game -> 2 Player Game.
 - Pad: d-pad/stick move, A/B (Cross/Square) fire, Circle bomb, START join/pause.
 
+## Two Vitas (ad-hoc or same Wi-Fi) — v1.03
+
+Player 1 plays on one Vita, player 2 on another. Both Vitas need this VPK
+(v1.03) and **the same game files** in `ux0:data/DemonStar` (the ds.exe files
+are compared; settings come from player 1's Vita).
+
+1. In the launcher set **Play** to *Two Vitas, ad-hoc: HOST* on player 1's Vita
+   and *Two Vitas, ad-hoc: JOIN* on player 2's.
+2. Player 1 picks DemonStar or Secret Missions; player 2 picks *JOIN player 1's game*.
+3. Each Vita opens the system ad-hoc dialog (group `DEMONSTR`) and connects.
+4. When the lobby says the game is starting, both Vitas run it together.
+   DemonStar: player 2 presses START to join in. Secret Missions 1: player 1
+   chooses Start Game -> 2 Player Game.
+
+*Same Wi-Fi* works the same way, through a router, on UDP port 7777 (both Vitas
+on one network in Settings > Network). Use it if ad-hoc doesn't connect.
+
+How it works: delay-based lockstep. Both Vitas run the whole game. Only the
+buttons are sent, 3 frames (50 ms) ahead, several times per packet in case some
+are lost. The game's clock, the date, the registry and the sound buffer
+positions are made to depend only on the game's own progress, so both Vitas
+stay in step frame by frame. A state checksum is compared twice a second; a
+mismatch shows "Out of sync" and is logged. If the link stalls,
+"Waiting for the other Vita..." is shown. After 20 s without a link, or when
+either player quits (L+R+START+SELECT), the session ends on both Vitas.
+
+- Rollback is not used: it would need the game state saved and replayed every
+  frame, which a recompiled 1998 game can't do cheaply. On ad-hoc the 50 ms
+  input delay is hardly noticeable.
+- Two-Vita games keep their own settings and high scores
+  (`ux0:data/DemonStar/save/<game>/net`), so the normal ones are untouched.
+- The Bluetooth player 2 option is still there (*Play: One Vita*).
+
 ## How it works
 
 - `tools/pe.py` — loads the PE and finds all functions (recursive descent from the
@@ -93,7 +126,10 @@ The pad shows up in both games as a joystick and is given to player 2.
 
 ## Limitations
 
-- Multiplayer (DirectPlay / IPX / modem) is not available.
+- The games' own network modes (DirectPlay / IPX / modem) are not available;
+  two-Vita play is done by the port instead (see above).
+- Two-Vita play was tested with two instances of the Linux build (lockstep,
+  packet loss, 8-minute run with checksums every frame), not yet on two real Vitas.
 - Music is played through a General MIDI soundfont, so it sounds like a GM synth,
   not exactly like any specific 1998 sound card.
 

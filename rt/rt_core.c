@@ -333,8 +333,30 @@ void win_pump_host(void);
 void rt_spin_poll(void) {
     static uint32_t n, last;
     if ((++n & 255) == 0) {
+        if (g_netplay) { rt_advance_us(1000); win_pump_host(); return; }
         uint32_t now = host_ticks_ms();
         if (now != last) { last = now; win_pump_host(); }
         else host_sleep_ms(1);
     }
+}
+
+/* ---------------- clock ---------------- */
+int g_netplay;
+char g_save_dir_override[256];
+const char *rt_save_dir(void) { return g_save_dir_override[0] ? g_save_dir_override : host_save_dir(); }
+static uint64_t vt_us;            /* virtual time (netplay) */
+static int64_t vt_real_base;      /* host time at vt = 0, moved forward after stalls (local only) */
+static int vt_started;
+uint64_t rt_us(void) { return g_netplay ? vt_us : host_ticks_us(); }
+uint32_t rt_ms(void) { return (uint32_t)(rt_us() / 1000); }
+void rt_advance_us(uint32_t us) {
+    if (!g_netplay) return;
+    if (!vt_started) { vt_started = 1; vt_real_base = (int64_t)host_ticks_us() - (int64_t)vt_us; }
+    vt_us += us;
+    /* keep the virtual clock near real time (this only decides how long to
+       sleep, never what the game sees) */
+    int64_t real = (int64_t)host_ticks_us() - vt_real_base;
+    int64_t ahead = (int64_t)vt_us - real;
+    if (ahead > 2000) host_sleep_ms((uint32_t)(ahead / 1000));
+    else if (ahead < -100000) vt_real_base = (int64_t)host_ticks_us() - (int64_t)vt_us - 100000;
 }

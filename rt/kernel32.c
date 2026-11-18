@@ -33,7 +33,7 @@ const char *map_path(const char *wp, char *out, int outlen) {
     /* basename of the windows path */
     const char *b = wp;
     for (const char *p = wp; *p; p++) if (*p == '\\' || *p == '/' || *p == ':') b = p + 1;
-    if (ci_find(host_save_dir(), b, out, outlen)) return out;
+    if (ci_find(rt_save_dir(), b, out, outlen)) return out;
     if (ci_find(host_game_dir(), b, out, outlen)) return out;
     /* subfolder newstuff\ */
     if (strstr(wp, "newstuff") || strstr(wp, "NEWSTUFF")) {
@@ -69,8 +69,8 @@ SHIM(KERNEL32, CreateFileA, 7) {
         /* writes always go to the save dir */
         const char *b = name;
         for (const char *p = name; *p; p++) if (*p == '\\' || *p == '/' || *p == ':') b = p + 1;
-        char sp[600]; snprintf(sp, sizeof sp, "%s/%s", host_save_dir(), b);
-        if (found && strncmp(found, host_save_dir(), strlen(host_save_dir())) != 0 && (disp == 3 || disp == 4)) {
+        char sp[600]; snprintf(sp, sizeof sp, "%s/%s", rt_save_dir(), b);
+        if (found && strncmp(found, rt_save_dir(), strlen(rt_save_dir())) != 0 && (disp == 3 || disp == 4)) {
             /* copy-on-write from game dir to save dir */
             FILE *a = fopen(found, "rb"), *o = fopen(sp, "wb");
             if (a && o) { char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof buf, a)) > 0) fwrite(buf, 1, n, o); }
@@ -259,6 +259,11 @@ SHIM(KERNEL32, GetProcAddress, 2) {
 /* --------- time --------- */
 SHIM(KERNEL32, Sleep, 1) {
     uint32_t ms = ARG(0);
+    if (g_netplay) {
+        uint32_t k = 0;
+        do { rt_advance_us(ms ? 1000 : 100); winmm_service(); dsound_service(); } while (++k < ms);
+        return 0;
+    }
     uint32_t end = host_ticks_ms() + ms;
     do {
         winmm_service();
@@ -271,7 +276,8 @@ SHIM(KERNEL32, Sleep, 1) {
 }
 SHIM(KERNEL32, GetLocalTime, 1) {
     uint32_t p = ARG(0);
-    time_t t = time(NULL); struct tm *tm = localtime(&t);
+    extern int64_t g_fixed_time;
+    time_t t = g_netplay ? (time_t)g_fixed_time : time(NULL); struct tm *tm = g_netplay ? gmtime(&t) : localtime(&t);
     wr16(p, tm->tm_year + 1900); wr16(p + 2, tm->tm_mon + 1); wr16(p + 4, tm->tm_wday); wr16(p + 6, tm->tm_mday);
     wr16(p + 8, tm->tm_hour); wr16(p + 10, tm->tm_min); wr16(p + 12, tm->tm_sec); wr16(p + 14, 0);
     return 0;
@@ -280,9 +286,10 @@ SHIM(KERNEL32, QueryPerformanceFrequency, 1) { wr64(ARG(0), 1000000ull); return 
 SHIM(KERNEL32, QueryPerformanceCounter, 1) {
     /* games busy-wait on this for frame pacing: yield the CPU now and then */
     static uint32_t n;
-    if ((++n & 31) == 0) host_sleep_ms(0);
+    if (g_netplay) rt_advance_us(100);
+    else if ((++n & 31) == 0) host_sleep_ms(0);
     winmm_service();
-    wr64(ARG(0), host_ticks_us());
+    wr64(ARG(0), rt_us());
     return 1;
 }
 

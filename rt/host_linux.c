@@ -15,6 +15,11 @@ static struct timespec t0;
 static FILE *logf_;
 static int frame_no, dump_every = 0;
 static const char *dump_dir = "/tmp/frames";
+#include "netplay.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
 static uint32_t max_time;
 static pthread_mutex_t amtx = PTHREAD_MUTEX_INITIALIZER;
 static FILE *wavf;
@@ -62,6 +67,11 @@ void host_present(const uint8_t *pix, int w, int h, int pitch, const uint32_t *p
     for (int y = 0; y < h; y++) memcpy(last + y * w, pix + y * pitch, w);
     memcpy(lpal, pal, sizeof lpal);
     frame_no++;
+    if (getenv("DS_DUMP_VT")) {
+        extern uint64_t rt_us(void);
+        static uint64_t next_vt; uint64_t step = (uint64_t)atoi(getenv("DS_DUMP_VT")) * 1000;
+        if (rt_us() >= next_vt) { char n[64]; snprintf(n, sizeof n, "v%06u", (unsigned)(next_vt / 1000)); dump_frame(n); while (next_vt <= rt_us()) next_vt += step; }
+    }
     if (dump_every && frame_no % dump_every == 0) { char n[64]; snprintf(n, sizeof n, "f%06d", frame_no); dump_frame(n); }
 
 }
@@ -133,10 +143,31 @@ void host_audio_init(void) {
     pthread_t t; pthread_create(&t, NULL, audio_thread, NULL);
 }
 
+/* ---- netplay transport: UDP on localhost ---- */
+static int net_sock = -1, have_peer;
+static struct sockaddr_in peer;
+int host_net_send(const void *buf, int len) {
+    if (!have_peer) return -1;
+    static int drop = -1; if (drop < 0) drop = getenv("DS_NETDROP") ? atoi(getenv("DS_NETDROP")) : 0;
+    if (drop && rand() % 100 < drop) return len;    /* simulated packet loss */
+    return (int)sendto(net_sock, buf, len, 0, (struct sockaddr *)&peer, sizeof peer);
+}
+int host_net_recv(void *buf, int max) {
+    struct sockaddr_in from; socklen_t fl = sizeof from;
+    int n = (int)recvfrom(net_sock, buf, max, 0, (struct sockaddr *)&from, &fl);
+    if (n <= 0) return 0;
+    if (!have_peer) { peer = from; have_peer = 1; }
+    return n;
+}
+int host_net_cancelled(void) { return 0; }
+void host_net_status(const char *msg, int ms) { (void)ms; if (msg) fprintf(stderr, "[net] %s\n", msg); }
+void host_net_end(const char *why) { fprintf(stderr, "[net] session over: %s\n", why); dump_frame("last"); }
+
 int main(int argc, char **argv) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
+    if (getenv("DS_FRAMES")) dump_dir = getenv("DS_FRAMES");
     mkdir(dump_dir, 0755);
-    logf_ = fopen("/tmp/ds.log", "w");
+    logf_ = fopen(getenv("DS_LOG") ? getenv("DS_LOG") : "/tmp/ds.log", "w");
     if (getenv("DS_SPEED")) speed = atof(getenv("DS_SPEED"));
     if (getenv("DS_DUMP_EVERY")) dump_every = atoi(getenv("DS_DUMP_EVERY"));
     if (getenv("DS_MAXTIME")) max_time = atoi(getenv("DS_MAXTIME"));
@@ -153,6 +184,23 @@ int main(int argc, char **argv) {
     int idx = (getenv("DS_GAME") && !strcmp(getenv("DS_GAME"), "sm1")) ? 1 : 0;
     launch_opts o = {0, -1, 0};
     if (getenv("DS_DIFF")) o.ds1_difficulty = atoi(getenv("DS_DIFF"));
+    const char *net = getenv("DS_NET");   /* host:PORT or join:PORT */
+    if (net) {
+        char err[256] = "";
+        int port = atoi(strchr(net, ':') ? strchr(net, ':') + 1 : "7777");
+        net_sock = socket(AF_INET, SOCK_DGRAM, 0);
+        fcntl(net_sock, F_SETFL, O_NONBLOCK);
+        struct sockaddr_in a; memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (!strncmp(net, "host", 4)) {
+            a.sin_port = htons(port);
+            if (bind(net_sock, (struct sockaddr *)&a, sizeof a) < 0) { perror("bind"); return 1; }
+            if (np_host(idx, &o, err, sizeof err) < 0) { fprintf(stderr, "netplay: %s\n", err); return 1; }
+        } else {
+            peer = a; peer.sin_port = htons(port); have_peer = 1;
+            idx = np_join(&o, err, sizeof err);
+            if (idx < 0) { fprintf(stderr, "netplay: %s\n", err); return 1; }
+        }
+    }
     return game_main(idx, &o);
 }
 const char *host_soundfont_path(void) { const char *s = getenv("DS_SF2"); return s ? s : "GeneralUser-GS.sf2"; }
