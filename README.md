@@ -63,25 +63,10 @@ Saves, high scores and settings go to `ux0:data/DemonStar/save/`; log at
 
 High-score names are entered with the d-pad and fire, like the original.
 
-## Two players (Bluetooth controller)
-
-Player 1 uses the Vita's own controls; player 2 uses a Bluetooth controller.
-The pad shows up in both games as a joystick and is given to player 2.
-
-- Best: the [8BitVita-Pro3](https://github.com/disp06/8BitVita-Pro3) plugin v1.2+
-  (`BtSetPort0Mirror` / `BtGetPadState`): while DemonStar runs, the pad is no
-  longer copied onto the Vita's buttons, so both players are fully separate.
-- Other plugins that put the pad on controller port 2 also work; the pad's
-  buttons are then filtered out of player 1.
-- Connect the pad before starting the game (the games look for joysticks at start).
-- DemonStar: player 2 presses START on the pad to join.
-  Secret Missions 1: choose Start Game -> 2 Player Game.
-- Pad: d-pad/stick move, A/B (Cross/Square) fire, Circle bomb, START join/pause.
-
-## Two Vitas (ad-hoc or same Wi-Fi) — v1.03
+## Two Vitas (ad-hoc or same Wi-Fi)
 
 Player 1 plays on one Vita, player 2 on another. Both Vitas need this VPK
-(v1.03) and **the same game files** in `ux0:data/DemonStar` (the ds.exe files
+(v1.04 or later) and **the same game files** in `ux0:data/DemonStar` (the ds.exe files
 are compared; settings come from player 1's Vita).
 
 1. In the launcher set **Play** to *Two Vitas, ad-hoc: HOST* on player 1's Vita
@@ -109,7 +94,8 @@ either player quits (L+R+START+SELECT), the session ends on both Vitas.
   input delay is hardly noticeable.
 - Two-Vita games keep their own settings and high scores
   (`ux0:data/DemonStar/save/<game>/net`), so the normal ones are untouched.
-- The Bluetooth player 2 option is still there (*Play: One Vita*).
+- The Bluetooth player 2 mode was removed in v1.04: it called the 8BitVita-Pro3
+  plugin, and without that plugin the app crashed at the launcher (C2-12828-1).
 
 ## How it works
 
